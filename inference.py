@@ -90,5 +90,6 @@ def infer_gnn(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, args, data
         'False Negatives': te_fn
     }
     logging.info(json.dumps(result))
+    print(json.dumps(result))
 
     wandb.finish()
