@@ -48,8 +48,8 @@ def train_homo(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, mod
         logging.info(f'Train F1: {f1:.4f}')
 
         #evaluate
-        val_f1 = evaluate_homo(val_loader, val_inds, model, val_data, device, args)
-        te_f1 = evaluate_homo(te_loader, te_inds, model, te_data, device, args)
+        val_f1, val_prec, val_rec, val_acc, val_tp, val_tn, val_fp, val_fn  = evaluate_homo(val_loader, val_inds, model, val_data, device, args)
+        te_f1, te_prec, te_rec, te_acc, te_tp, te_tn, te_fp, te_fn = evaluate_homo(te_loader, te_inds, model, te_data, device, args)
 
         wandb.log({"f1/validation": val_f1}, step=epoch)
         wandb.log({"f1/test": te_f1}, step=epoch)
@@ -107,8 +107,8 @@ def train_hetero(tr_loader, val_loader, te_loader, tr_inds, val_inds, te_inds, m
         logging.info(f'Train F1: {f1:.4f}')
 
         #evaluate
-        val_f1 = evaluate_hetero(val_loader, val_inds, model, val_data, device, args)
-        te_f1 = evaluate_hetero(te_loader, te_inds, model, te_data, device, args)
+        val_f1, val_prec, val_rec, val_acc, val_tp, val_tn, val_fp, val_fn = evaluate_hetero(val_loader, val_inds, model, val_data, device, args)
+        te_f1, te_prec, te_rec, te_acc, te_tp, te_tn, te_fp, te_fn = evaluate_hetero(te_loader, te_inds, model, te_data, device, args)
 
         wandb.log({"f1/validation": val_f1}, step=epoch)
         wandb.log({"f1/test": te_f1}, step=epoch)

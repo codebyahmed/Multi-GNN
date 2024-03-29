@@ -4,7 +4,7 @@ from torch_geometric.transforms import BaseTransform
 from typing import Union
 from torch_geometric.data import Data, HeteroData
 from torch_geometric.loader import LinkNeighborLoader
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, precision_score, recall_score, accuracy_score
 import json
 
 class AddEgoIds(BaseTransform):
@@ -95,51 +95,60 @@ def get_loaders(tr_data, val_data, te_data, tr_inds, val_inds, te_inds, transfor
         
     return tr_loader, val_loader, te_loader
 
-@torch.no_grad()
+def calculate_confusion_matrix(pred, ground_truth):
+    TP = ((pred == 1) & (ground_truth == 1)).sum()
+    TN = ((pred == 0) & (ground_truth == 0)).sum()
+    FP = ((pred == 1) & (ground_truth == 0)).sum()
+    FN = ((pred == 0) & (ground_truth == 1)).sum()
+    return TP, TN, FP, FN
+
+@torch.no_grad()  # Disables tracking of gradients in autograd.
 def evaluate_homo(loader, inds, model, data, device, args):
     '''Evaluates the model performane for homogenous graph data.'''
-    preds = []
-    ground_truths = []
-    for batch in tqdm.tqdm(loader, disable=not args.tqdm):
-        #select the seed edges from which the batch was created
-        inds = inds.detach().cpu()
-        batch_edge_inds = inds[batch.input_id.detach().cpu()]
-        batch_edge_ids = loader.data.edge_attr.detach().cpu()[batch_edge_inds, 0]
-        mask = torch.isin(batch.edge_attr[:, 0].detach().cpu(), batch_edge_ids)
+    preds = []  # Initialize list to store predictions.
+    ground_truths = []  # Initialize list to store ground truth values.
+    for batch in tqdm.tqdm(loader, disable=not args.tqdm):  # Loop over the data loader with a progress bar.
+        inds = inds.detach().cpu()  # Detach the indices tensor from the computation graph and move it to CPU.
+        batch_edge_inds = inds[batch.input_id.detach().cpu()]  # Get the indices of the edges in the batch.
+        batch_edge_ids = loader.data.edge_attr.detach().cpu()[batch_edge_inds, 0]  # Get the edge ids of the edges in the batch.
+        mask = torch.isin(batch.edge_attr[:, 0].detach().cpu(), batch_edge_ids)  # Create a mask of the edges that are in the batch.
 
-        #add the seed edges that have not been sampled to the batch
-        missing = ~torch.isin(batch_edge_ids, batch.edge_attr[:, 0].detach().cpu())
+        missing = ~torch.isin(batch_edge_ids, batch.edge_attr[:, 0].detach().cpu())  # Find the edges that are missing from the batch.
 
-        if missing.sum() != 0 and (args.data == 'Small_J' or args.data == 'Small_Q'):
-            missing_ids = batch_edge_ids[missing].int()
-            n_ids = batch.n_id
-            add_edge_index = data.edge_index[:, missing_ids].detach().clone()
-            node_mapping = {value.item(): idx for idx, value in enumerate(n_ids)}
-            add_edge_index = torch.tensor([[node_mapping[val.item()] for val in row] for row in add_edge_index])
-            add_edge_attr = data.edge_attr[missing_ids, :].detach().clone()
-            add_y = data.y[missing_ids].detach().clone()
+        if missing.sum() != 0 and (args.data == 'Small_J' or args.data == 'Small_Q'):  # If there are missing edges and the data is of type 'Small_J' or 'Small_Q'.
+            missing_ids = batch_edge_ids[missing].int()  # Get the ids of the missing edges.
+            n_ids = batch.n_id  # Get the node ids in the batch.
+            add_edge_index = data.edge_index[:, missing_ids].detach().clone()  # Get the edge indices of the missing edges.
+            node_mapping = {value.item(): idx for idx, value in enumerate(n_ids)}  # Create a mapping from node ids to their indices.
+            add_edge_index = torch.tensor([[node_mapping[val.item()] for val in row] for row in add_edge_index])  # Map the node ids in the edge indices to their indices.
+            add_edge_attr = data.edge_attr[missing_ids, :].detach().clone()  # Get the edge attributes of the missing edges.
+            add_y = data.y[missing_ids].detach().clone()  # Get the labels of the missing edges.
         
-            batch.edge_index = torch.cat((batch.edge_index, add_edge_index), 1)
-            batch.edge_attr = torch.cat((batch.edge_attr, add_edge_attr), 0)
-            batch.y = torch.cat((batch.y, add_y), 0)
+            batch.edge_index = torch.cat((batch.edge_index, add_edge_index), 1)  # Add the missing edges to the batch.
+            batch.edge_attr = torch.cat((batch.edge_attr, add_edge_attr), 0)  # Add the attributes of the missing edges to the batch.
+            batch.y = torch.cat((batch.y, add_y), 0)  # Add the labels of the missing edges to the batch.
 
-            mask = torch.cat((mask, torch.ones(add_y.shape[0], dtype=torch.bool)))
+            mask = torch.cat((mask, torch.ones(add_y.shape[0], dtype=torch.bool)))  # Update the mask to include the missing edges.
 
-        #remove the unique edge id from the edge features, as it's no longer needed
-        batch.edge_attr = batch.edge_attr[:, 1:]
+        batch.edge_attr = batch.edge_attr[:, 1:]  # Remove the unique edge id from the edge attributes, as it's no longer needed.
         
-        with torch.no_grad():
-            batch.to(device)
-            out = model(batch.x, batch.edge_index, batch.edge_attr)
-            out = out[mask]
-            pred = out.argmax(dim=-1)
-            preds.append(pred)
-            ground_truths.append(batch.y[mask])
-    pred = torch.cat(preds, dim=0).cpu().numpy()
-    ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
-    f1 = f1_score(ground_truth, pred)
+        with torch.no_grad():  # Disables tracking of gradients in autograd.
+            batch.to(device)  # Move the batch data to the specified device.
+            out = model(batch.x, batch.edge_index, batch.edge_attr)  # Forward pass through the model.
+            out = out[mask]  # Apply the mask to the output.
+            pred = out.argmax(dim=-1)  # Get the predicted class for each example in the batch.
+            preds.append(pred)  # Add the predictions to the list of predictions.
+            ground_truths.append(batch.y[mask])  # Add the ground truth values to the list of ground truth values.
+    pred = torch.cat(preds, dim=0).cpu().numpy()  # Concatenate all the predictions and convert to a numpy array.
+    ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()  # Concatenate all the ground truth values and convert to a numpy array.
+    f1 = f1_score(ground_truth, pred)  # Compute the F1 score.
+    prec = precision_score(ground_truth, pred)  # Compute the precision.
+    rec = recall_score(ground_truth, pred)  # Compute the recall.
+    acc = accuracy_score(ground_truth, pred)  # Compute the accuracy.
 
-    return f1
+    TP, TN, FP, FN = calculate_confusion_matrix(pred, ground_truth)  # Calculate the confusion matrix.
+
+    return f1, prec, rec, acc, TP, TN, FP, FN
 
 @torch.no_grad()
 def evaluate_hetero(loader, inds, model, data, device, args):
@@ -185,9 +194,14 @@ def evaluate_hetero(loader, inds, model, data, device, args):
             ground_truths.append(batch['node', 'to', 'node'].y[mask])
     pred = torch.cat(preds, dim=0).cpu().numpy()
     ground_truth = torch.cat(ground_truths, dim=0).cpu().numpy()
-    f1 = f1_score(ground_truth, pred)
+    f1 = f1_score(ground_truth, pred)  # Compute the F1 score.
+    prec = precision_score(ground_truth, pred)  # Compute the precision.
+    rec = recall_score(ground_truth, pred)  # Compute the recall.
+    acc = accuracy_score(ground_truth, pred)  # Compute the accuracy.
 
-    return f1
+    TP, TN, FP, FN = calculate_confusion_matrix(pred, ground_truth)  # Calculate the confusion matrix.
+
+    return f1, prec, rec, acc, TP, TN, FP, FN
 
 def save_model(model, optimizer, epoch, args, data_config):
     # Save the model in a dictionary
